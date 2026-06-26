@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rentcar
+  labels:
+    app: rentcar
+    environment: production

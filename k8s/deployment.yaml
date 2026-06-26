@@ -1,0 +1,64 @@
+# IE2: Deployment del microservicio RentCar en Kubernetes
+# Las anotaciones de Prometheus permiten el scraping automático (IE1)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rentcar-deployment
+  namespace: rentcar
+  labels:
+    app: rentcar-backend
+    version: "1.0.0"
+spec:
+  replicas: 2  # 2 réplicas para alta disponibilidad
+  selector:
+    matchLabels:
+      app: rentcar-backend
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0  # Zero downtime durante actualizaciones
+  template:
+    metadata:
+      labels:
+        app: rentcar-backend
+        version: "1.0.0"
+      # IE1: Anotaciones para que Prometheus descubra y scrapee automáticamente
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/actuator/prometheus"
+        prometheus.io/port: "8080"
+    spec:
+      containers:
+        - name: rentcar-backend
+          image: DOCKERHUB_USERNAME/rentcar-back:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: SPRING_APPLICATION_NAME
+              value: "rentacar"
+          # IE1: Health checks para Kubernetes (usa el endpoint de Actuator)
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 5
+            failureThreshold: 3
+          # Límites de recursos (IE3: aparecen como métricas en Grafana)
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"

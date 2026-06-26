@@ -1,0 +1,39 @@
+# ============================================================
+# IE1: Configuración de Prometheus para RentCar EP3
+# Prometheus recolecta métricas desde /actuator/prometheus
+# cada 15 segundos
+# ============================================================
+
+global:
+  scrape_interval: 15s        # Con qué frecuencia recolectar métricas
+  evaluation_interval: 15s    # Con qué frecuencia evaluar reglas de alerta
+  external_labels:
+    monitor: 'rentcar-monitor'
+    environment: 'production'
+
+# Reglas de alerta (IE6: si la app cae, Prometheus lo detecta)
+rule_files:
+  - "alert_rules.yml"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+
+scrape_configs:
+
+  # --- Prometheus se monitorea a sí mismo ---
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # --- IE1: Scraping del microservicio RentCar ---
+  - job_name: 'rentcar-api'
+    metrics_path: '/actuator/prometheus'   # Endpoint expuesto por Spring Actuator
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['backend:8080']          # Nombre del servicio en docker-compose
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'rentcar-backend'

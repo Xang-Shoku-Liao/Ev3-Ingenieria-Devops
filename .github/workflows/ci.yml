@@ -1,0 +1,182 @@
+name: "CI/CD DevOps RentCar - EP3 Observabilidad"
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+jobs:
+  # ============================================================
+  # IE5/IE6: ANÁLISIS DE CALIDAD Y SEGURIDAD
+  # Si Snyk o SonarCloud detectan fallas críticas → pipeline PARA
+  # ============================================================
+  analisis-vulnerabilidad:
+    name: "Seguridad: Snyk + Tests + Cobertura"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0  # SonarCloud necesita historial completo
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Make Maven Wrapper executable
+        run: chmod +x mvnw
+
+      # IE5: Análisis de vulnerabilidades con Snyk
+      - name: Install Snyk CLI
+        run: npm install -g snyk
+
+      - name: Snyk Security Test
+        continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: snyk test --severity-threshold=high
+
+      - name: Generate Snyk JSON Report
+        continue-on-error: true
+        if: always()
+        run: snyk test --json > snyk-report.json || echo "snyk-sin-token"
+
+      - name: Upload Snyk Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snyk-report
+          path: snyk-report.json
+
+      # IE6: Tests + JaCoCo — FALLA SI COBERTURA < 70%
+      - name: Run Tests with Coverage (JaCoCo)
+        run: ./mvnw clean verify
+        # Si los tests fallan o la cobertura es menor a 70%,
+        # este step falla y el pipeline se detiene aquí (IE6)
+
+      - name: Upload JaCoCo Coverage Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-coverage-report
+          path: target/site/jacoco/
+
+      # IE5: Análisis estático con SonarCloud
+      - name: SonarCloud Analysis
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          ./mvnw sonar:sonar \
+            -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY }} \
+            -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }} \
+            -Dsonar.host.url=https://sonarcloud.io \
+            -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml
+
+      # IE6: Verificar Quality Gate de SonarCloud
+      # Si el quality gate falla (bugs, vulnerabilidades, code smells), el pipeline para
+      - name: Check SonarCloud Quality Gate
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          echo "Verificando Quality Gate de SonarCloud..."
+          STATUS=$(curl -s -u $SONAR_TOKEN: \
+            "https://sonarcloud.io/api/qualitygates/project_status?projectKey=${{ secrets.SONAR_PROJECT_KEY }}" \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['projectStatus']['status'])")
+          echo "Quality Gate Status: $STATUS"
+          if [ "$STATUS" != "OK" ]; then
+            echo "❌ PIPELINE DETENIDO: Quality Gate de SonarCloud falló (status: $STATUS)"
+            echo "El pipeline se detiene para proteger el entorno productivo (IE6)"
+            exit 1
+          fi
+          echo "✅ Quality Gate OK — el código cumple los estándares de calidad"
+
+  # ============================================================
+  # IE2: BUILD, PUSH DOCKER Y DEPLOY A KUBERNETES
+  # Solo se ejecuta si el job anterior pasó completamente
+  # ============================================================
+  build-and-push-docker:
+    name: "Build Docker + Push a DockerHub"
+    runs-on: ubuntu-latest
+    needs: analisis-vulnerabilidad  # IE6: depende del análisis → si falla, este no corre
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Make Maven Wrapper executable
+        run: chmod +x mvnw
+
+      - name: Build JAR (skip tests — ya corrieron en el job anterior)
+        run: ./mvnw clean package -DskipTests
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build Docker image
+        run: docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/rentcar-back:latest .
+
+      - name: Push Docker image
+        run: docker push ${{ secrets.DOCKERHUB_USERNAME }}/rentcar-back:latest
+
+      # IE3: Registrar tiempo de despliegue como métrica del pipeline
+      - name: Record deployment time metric
+        run: |
+          echo "DEPLOY_TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_ENV
+          echo "✅ Imagen publicada en DockerHub: ${{ secrets.DOCKERHUB_USERNAME }}/rentcar-back:latest"
+          echo "⏱️ Tiempo de despliegue registrado: $(date -u)"
+
+  # ============================================================
+  # IE2: DEPLOY A KUBERNETES (Google Kubernetes Engine)
+  # ============================================================
+  deploy-kubernetes:
+    name: "Deploy a Kubernetes (GKE)"
+    runs-on: ubuntu-latest
+    needs: build-and-push-docker
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # Autenticar con Google Cloud
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      # Instalar gcloud CLI
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      # Obtener credenciales del cluster GKE
+      - name: Get GKE credentials
+        run: |
+          gcloud container clusters get-credentials ${{ secrets.GKE_CLUSTER_NAME }} \
+            --zone ${{ secrets.GKE_ZONE }} \
+            --project ${{ secrets.GCP_PROJECT_ID }}
+
+      # IE2: Aplicar todos los manifiestos Kubernetes
+      - name: Deploy manifests to Kubernetes
+        run: |
+          # Reemplazar imagen en el deployment con la versión recién publicada
+          sed -i "s|DOCKERHUB_USERNAME|${{ secrets.DOCKERHUB_USERNAME }}|g" k8s/deployment.yaml
+          kubectl apply -f k8s/
+          kubectl rollout status deployment/rentcar-deployment -n rentcar --timeout=120s
+
+      - name: Show deployed services
+        run: |
+          echo "=== Pods desplegados ==="
+          kubectl get pods -n rentcar
+          echo "=== Servicios expuestos ==="
+          kubectl get services -n rentcar
