@@ -141,42 +141,32 @@ jobs:
   # ============================================================
   # IE2: DEPLOY A KUBERNETES (Google Kubernetes Engine)
   # ============================================================
-  deploy-kubernetes:
-    name: "Deploy a Kubernetes (GKE)"
-    runs-on: ubuntu-latest
-    needs: build-and-push-docker
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-
-      # Autenticar con Google Cloud
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-
-      # Instalar gcloud CLI
-      - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
-
-      # Obtener credenciales del cluster GKE
-      - name: Get GKE credentials
-        run: |
-          gcloud container clusters get-credentials ${{ secrets.GKE_CLUSTER_NAME }} \
-            --zone ${{ secrets.GKE_ZONE }} \
-            --project ${{ secrets.GCP_PROJECT_ID }}
-
-      # IE2: Aplicar todos los manifiestos Kubernetes
-      - name: Deploy manifests to Kubernetes
-        run: |
-          # Reemplazar imagen en el deployment con la versión recién publicada
-          sed -i "s|DOCKERHUB_USERNAME|${{ secrets.DOCKERHUB_USERNAME }}|g" k8s/deployment.yaml
-          kubectl apply -f k8s/
-          kubectl rollout status deployment/rentcar-deployment -n rentcar --timeout=120s
-
-      - name: Show deployed services
-        run: |
-          echo "=== Pods desplegados ==="
-          kubectl get pods -n rentcar
-          echo "=== Servicios expuestos ==="
-          kubectl get services -n rentcar
+  # deploy-kubernetes:
+  #   name: "Deploy a Kubernetes (GKE)"
+  #   runs-on: ubuntu-latest
+  #   needs: build-and-push-docker
+  #   steps:
+  #     - name: Checkout repository
+  #       uses: actions/checkout@v3
+  #     - name: Authenticate to Google Cloud
+  #       uses: google-github-actions/auth@v2
+  #       with:
+  #         credentials_json: ${{ secrets.GCP_SA_KEY }}
+  #     - name: Set up Cloud SDK
+  #       uses: google-github-actions/setup-gcloud@v2
+  #     - name: Get GKE credentials
+  #       run: |
+  #         gcloud container clusters get-credentials ${{ secrets.GKE_CLUSTER_NAME }} \
+  #           --zone ${{ secrets.GKE_ZONE }} \
+  #           --project ${{ secrets.GCP_PROJECT_ID }}
+  #     - name: Deploy manifests to Kubernetes
+  #       run: |
+  #         sed -i "s|DOCKERHUB_USERNAME|${{ secrets.DOCKERHUB_USERNAME }}|g" k8s/deployment.yaml
+  #         kubectl apply -f k8s/
+  #         kubectl rollout status deployment/rentcar-deployment -n rentcar --timeout=120s
+  #     - name: Show deployed services
+  #       run: |
+  #         echo "=== Pods desplegados ==="
+  #         kubectl get pods -n rentcar
+  #         echo "=== Servicios expuestos ==="
+  #         kubectl get services -n rentcar
